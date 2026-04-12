@@ -44,7 +44,7 @@ def ask(prompt, cfg: dict) -> str:
             "num_predict": llm_cfg.get("max_tokens", 200),
         },
     }
-    timeout = llm_cfg.get("timeout", 30)
+    timeout = llm_cfg.get("timeout", 90)   # 90s default — slower models need time
 
     for attempt in (1, 2):          # 1 retry only
         try:

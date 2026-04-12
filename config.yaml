@@ -5,7 +5,7 @@ llm:
   model: "mistral"        # updated: mistral is the pulled model
   temperature: 0.1        # very low = deterministic JSON output
   max_tokens: 150         # short — we only need {"action":..., "input":...}
-  timeout: 30
+  timeout: 90        # seconds — increased for slower CPU models
 
 actions:
   chrome_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
