@@ -1,0 +1,11 @@
+# RIO v1 — Minimal Requirements
+# Install: pip install -r requirements.txt
+
+# LLM
+requests==2.31.0
+
+# Config
+pyyaml==6.0.1
+
+# Logging color
+colorama==0.4.6

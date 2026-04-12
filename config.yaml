@@ -1,0 +1,16 @@
+# RIO v1 — Minimal Configuration
+
+llm:
+  base_url: "http://localhost:11434"
+  model: "llama3"         # change to "mistral" if you prefer
+  temperature: 0.1        # very low = deterministic JSON output
+  max_tokens: 150         # short — we only need {"action":..., "input":...}
+  timeout: 30
+
+actions:
+  chrome_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+  search_engine: "https://www.google.com/search?q="
+  files_dir: "~/Desktop"  # default dir for created files
+
+logging:
+  level: "INFO"
