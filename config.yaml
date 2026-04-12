@@ -2,10 +2,11 @@
 
 llm:
   base_url: "http://localhost:11434"
-  model: "mistral"        # updated: mistral is the pulled model
-  temperature: 0.1        # very low = deterministic JSON output
-  max_tokens: 150         # short — we only need {"action":..., "input":...}
-  timeout: 90        # seconds — increased for slower CPU models
+  model: "mistral"
+  temperature: 0.0        # greedy decoding — fastest + most deterministic
+  max_tokens: 60          # JSON reply is tiny; 60 tokens is plenty
+  timeout: 90             # full timeout (retry attempt)
+  fast_timeout: 20        # first-attempt timeout — returns fallback if exceeded
 
 actions:
   chrome_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"

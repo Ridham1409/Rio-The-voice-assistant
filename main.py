@@ -33,7 +33,7 @@ def main():
     cfg = load_config()
 
     from core.logger    import get_logger
-    from brain          import ask, build_messages, parse
+    from brain          import ask, build_messages, parse, fast_match
     from agent          import execute_steps
 
     log = get_logger("rio")
@@ -73,28 +73,31 @@ def main():
         log.info(f"[INPUT] {user_input!r}")
 
         try:
-            # Build messages list with system + user roles
-            messages = build_messages(user_input)
+            # ── Fast-match: try instant local pattern BEFORE hitting LLM ──────────
+            intent = fast_match(user_input)
+            if intent is not None:
+                log.info("[FAST] Pattern matched — skipping LLM.")
+                result = execute_steps(intent, cfg)
+                log.info(f"[RESULT] {result!r}")
 
-            # ── Call LLM ─────────────────────────────────────────
-            try:
-                raw = ask(messages, cfg)
-            except ConnectionError as e:
-                print(f"\n  [ERROR] {e}\n")
-                log.error(f"[LLM] Connection failed: {e}")
-                continue
-            except RuntimeError as e:
-                print(f"\n  [ERROR] {e}\n")
-                log.error(f"[LLM] Runtime error: {e}")
-                continue
+            else:
+                # ── Fall through to LLM for complex/unknown commands ─────────
+                messages = build_messages(user_input)
+                try:
+                    raw = ask(messages, cfg)
+                except ConnectionError as e:
+                    print(f"\n  [ERROR] {e}\n")
+                    log.error(f"[LLM] Connection failed: {e}")
+                    continue
+                except RuntimeError as e:
+                    print(f"\n  [ERROR] {e}\n")
+                    log.error(f"[LLM] Runtime error: {e}")
+                    continue
 
-            # ── Parse JSON ─────────────────────────────────────────
-            intent = parse(raw)
-            log.info(f"[INTENT] {intent}")
-
-            # ── Execute action ───────────────────────────────────────
-            result = execute_steps(intent, cfg)
-            log.info(f"[RESULT] {result!r}")
+                intent = parse(raw)
+                log.info(f"[INTENT] {intent}")
+                result = execute_steps(intent, cfg)
+                log.info(f"[RESULT] {result!r}")
 
         except Exception as e:
             # Top-level safety net — this should never trigger if modules are correct

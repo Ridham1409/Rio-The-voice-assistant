@@ -1,8 +1,10 @@
 """
 RIO v1 — brain/llm_client.py
-Sends messages to Ollama /api/chat and returns the raw text response.
-Accepts either a pre-built messages list (preferred) or a plain string.
-One retry on timeout. Raises on connection failure.
+Sends messages to Ollama /api/chat.
+
+Timeout strategy (tiered for speed):
+  Attempt 1: fast_timeout (20s) — returns instant fallback if exceeded
+  Attempt 2: full timeout  (90s) — raises RuntimeError if exceeded
 """
 
 import requests
@@ -27,47 +29,55 @@ def ask(prompt, cfg: dict) -> str:
         ConnectionError: Ollama is not running.
         RuntimeError:    Bad/timeout response.
     """
-    llm_cfg = cfg.get("llm", {})
+    llm_cfg      = cfg.get("llm", {})
+    fast_timeout = llm_cfg.get("fast_timeout", 20)  # snappy first attempt
+    full_timeout = llm_cfg.get("timeout", 90)        # patient retry
 
     # Accept pre-built messages list OR legacy plain string
     if isinstance(prompt, list):
-        messages = prompt          # already has system + user roles
+        messages = prompt
     else:
         messages = [{"role": "user", "content": str(prompt)}]
 
     payload = {
-        "model":   llm_cfg.get("model", "mistral"),
+        "model":    llm_cfg.get("model", "mistral"),
         "messages": messages,
-        "stream":  False,
+        "stream":   False,
         "options": {
-            "temperature": llm_cfg.get("temperature", 0.1),
-            "num_predict": llm_cfg.get("max_tokens", 200),
+            "temperature": llm_cfg.get("temperature", 0.0),
+            "num_predict": llm_cfg.get("max_tokens", 60),
         },
     }
-    timeout = llm_cfg.get("timeout", 90)   # 90s default — slower models need time
 
-    for attempt in (1, 2):          # 1 retry only
+    for attempt in (1, 2):
+        # Tiered timeout: fast on first attempt, full on retry
+        timeout = fast_timeout if attempt == 1 else full_timeout
         try:
-            log.info(f"Asking LLM (attempt {attempt})...")
+            log.info(f"[LLM] Asking (attempt {attempt}, timeout={timeout}s)...")
             resp = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
             resp.raise_for_status()
-            # FIX: /api/chat response path is message.content, not top-level response
             data = resp.json()
             text = (
                 data.get("message", {}).get("content", "")
-                or data.get("response", "")   # fallback for older Ollama builds
+                or data.get("response", "")
             ).strip()
-            log.info(f"LLM replied: {text[:80]}")
+            log.info(f"[LLM] Reply: {text[:80]}")
             return text
+
         except requests.exceptions.ConnectionError:
             raise ConnectionError(
                 "Cannot reach Ollama. Is it running?\n"
                 "  → Start it with:  ollama serve"
             )
+
         except requests.exceptions.Timeout:
-            if attempt == 2:
-                raise RuntimeError("Ollama timed out twice. Try a smaller model.")
-            log.warning("Timeout — retrying once...")
+            if attempt == 1:
+                # First attempt timed out — return an instant fallback
+                # The user sees a response immediately; they can retry the command.
+                log.warning(f"[LLM] Fast timeout ({fast_timeout}s) hit — returning quick fallback.")
+                return '{"action":"respond","input":"Still processing — model is busy. Please try again."}'
+            raise RuntimeError("Ollama timed out twice. Try a smaller model or increase timeout.")
+
         except Exception as e:
             raise RuntimeError(f"LLM error: {e}")
 
