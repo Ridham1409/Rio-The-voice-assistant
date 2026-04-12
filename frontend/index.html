@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RIO — Responsive Intelligent Operator</title>
+    <!-- SEO Meta Tags -->
+    <meta name="description" content="RIO - The premium, futuristic AI assistant interface. Experience next-gen AI interaction.">
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <!-- CSS -->
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Animated Background Layer -->
+    <div class="bg-gradient-mesh"></div>
+    <div class="stars-overlay"></div>
+
+    <div class="app-container">
+        <!-- Sidebar (Optional, but looks premium) -->
+        <aside class="sidebar" id="sidebar">
+            <div class="logo-section">
+                <span class="logo-text">RIO</span>
+                <span class="logo-version">v1.1</span>
+            </div>
+            <nav class="side-nav">
+                <button class="nav-item active" title="Active Chat">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                    <span>Terminal</span>
+                </button>
+                <button class="nav-item" title="History">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    <span>History</span>
+                </button>
+            </nav>
+            <div class="status-card glow-blue">
+                <div class="status-indicator online"></div>
+                <div class="status-info">
+                    <span class="status-label">Engine</span>
+                    <span class="status-value">Ready</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="main-content">
+            <header class="top-header">
+                <div class="header-info">
+                    <h1>Responsive Intelligent Operator</h1>
+                    <p class="subtitle">System Status: <span class="status-text pulse-blue">Operational</span></p>
+                </div>
+                <div class="header-actions">
+                    <button id="clear-chat" class="icon-btn" title="Clear Chat">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                    </button>
+                </div>
+            </header>
+
+            <div class="chat-viewport" id="chat-viewport">
+                <!-- Messages will be injected here -->
+                <div class="welcome-message">
+                    <div class="rio-avatar-container">
+                        <div class="rio-avatar glow-blue"></div>
+                    </div>
+                    <h2>How can I assist you today?</h2>
+                    <p>I am RIO, your computer automation engine.</p>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <section class="input-section">
+                <div class="input-wrapper glow-purple">
+                    <div class="input-inner">
+                        <input type="text" id="user-input" placeholder="Type a command... (e.g. 'Open Chrome')" autocomplete="off">
+                        <div class="input-actions">
+                            <button id="send-btn" class="send-btn">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <p class="input-hint">Press <kbd>Enter</kbd> to send</p>
+            </section>
+        </main>
+    </div>
+
+    <!-- Script -->
+    <script src="/static/js/script.js"></script>
+</body>
+</html>

@@ -9,3 +9,8 @@ pyyaml==6.0.1
 
 # Logging color
 colorama==0.4.6
+
+# API server
+fastapi==0.111.0
+uvicorn==0.29.0
+python-multipart==0.0.9
