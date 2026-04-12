@@ -34,7 +34,7 @@ def main():
 
     from core.logger    import get_logger
     from brain          import ask, build_messages, parse
-    from agent          import execute
+    from agent          import execute_steps
 
     log = get_logger("rio")
 
@@ -93,7 +93,7 @@ def main():
             log.info(f"[INTENT] {intent}")
 
             # ── Execute action ───────────────────────────────────────
-            result = execute(intent, cfg)
+            result = execute_steps(intent, cfg)
             log.info(f"[RESULT] {result!r}")
 
         except Exception as e:

@@ -1,12 +1,11 @@
 """
 RIO v1 — agent/executor.py
-The ENTIRE agent logic in one simple function.
+Dispatches single or multi-step intents to action functions.
 
-Flow:
-  intent dict → dispatch to action function → return result string
+Flow (single):  intent dict → execute()       → result str
+Flow (multi):   intent list → execute_steps() → combined result str
 
-No planning, no retries, no multi-step loops.
-Uses a plain if/elif dispatch instead of a registry.
+Max 3 sequential steps. No retries. No complex reasoning.
 """
 
 from core.logger import get_logger
@@ -30,6 +29,45 @@ def _guard(value: str, action: str) -> str | None:
     if len(value) > _MAX_INPUT_LEN:
         return f"Input too long ({len(value)} chars). Max is {_MAX_INPUT_LEN}."
     return None  # safe
+
+def execute_steps(intent, cfg: dict) -> str:
+    """
+    Entry point for both single and multi-step commands.
+
+    Args:
+        intent: dict  → single action  {"action": str, "input": str}
+                list  → multi-step     [{...}, {...}, ...]
+        cfg:    loaded config dict
+
+    Returns:
+        A combined, human-readable result string.
+        Each step result is on its own line for multi-step commands.
+    """
+    # Normalize: single dict → wrap in list
+    if isinstance(intent, dict):
+        steps = [intent]
+    elif isinstance(intent, list):
+        steps = intent[:3]      # enforce max 3 even if parser missed it
+    else:
+        log.warning(f"[STEPS] Unexpected intent type: {type(intent)} — falling back.")
+        return "I didn't understand that command."
+
+    if not steps:
+        return "I didn't understand that command."
+
+    log.info(f"[STEPS] Executing {len(steps)} step(s).")
+
+    results = []
+    for i, step in enumerate(steps, 1):
+        log.info(f"[STEPS] Step {i}/{len(steps)}")
+        result = execute(step, cfg)
+        results.append(result)
+
+    # Single step → plain result. Multi-step → numbered list.
+    if len(results) == 1:
+        return results[0]
+    return "\n".join(f"Step {i}: {r}" for i, r in enumerate(results, 1))
+
 
 
 def execute(intent: dict, cfg: dict) -> str:

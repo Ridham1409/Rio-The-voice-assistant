@@ -13,17 +13,19 @@ log = get_logger(__name__)
 VALID_ACTIONS = {"open_app", "search_web", "create_file", "read_file", "respond", "none"}
 
 
-def parse(text: str) -> dict:
+def parse(text: str):
     """
-    Extract {"action": str, "input": str} from LLM output.
+    Extract intent(s) from LLM output. Always safe — never raises.
+
+    Returns EITHER:
+      - dict  {"action": str, "input": str}          — single action
+      - list  [{"action": str, "input": str}, ...]   — multi-step (from {"steps": [...]})
 
     Strategies tried in order:
       1. Direct json.loads
       2. Extract first {...} block with regex
       3. Fix common issues (trailing comma, single quotes) and retry
-      4. Hardcoded fallback to "respond"
-
-    Returns: {"action": str, "input": str}
+      4. Hardcoded none fallback
     """
     # Guard: None or non-string input
     if text is None:
@@ -63,9 +65,10 @@ def parse(text: str) -> dict:
 
 
 def _try_parse(text: str):
+    """Try to parse text as JSON dict. Returns dict or None."""
     try:
         result = json.loads(text)
-        # Must be a dict — lists/ints/strings are rejected
+        # Accept dict — lists top-level are rejected (steps must be inside {})
         if not isinstance(result, dict):
             log.debug(f"JSON parsed but is {type(result).__name__}, not dict — rejecting.")
             return None
@@ -77,9 +80,18 @@ def _try_parse(text: str):
         return None
 
 
-def _validate(data: dict) -> dict:
-    """Ensure both required keys exist and action is valid."""
+def _validate(data: dict):
+    """
+    Validate parsed JSON. Returns:
+      - list  if data has a 'steps' key  (multi-step command)
+      - dict  otherwise                  (single-step command)
+    """
     try:
+        # ── Multi-step: {"steps": [...]} ────────────────────────────────
+        if "steps" in data:
+            return _validate_steps(data["steps"])
+
+        # ── Single-step ─────────────────────────────────────────────
         action = str(data.get("action") or "none").strip().lower()
         inp    = str(data.get("input")  or "").strip()
 
@@ -87,7 +99,6 @@ def _validate(data: dict) -> dict:
             log.warning(f"Unknown action '{action}' from LLM — falling back to none.")
             return _none_fallback()
 
-        # "none" action: use "response" key if present, else generic message
         if action == "none":
             msg = str(data.get("response") or inp or "I didn't understand that command.")
             return {"action": "none", "input": msg}
@@ -96,6 +107,38 @@ def _validate(data: dict) -> dict:
     except Exception as e:
         log.error(f"_validate crashed ({e}) — returning none fallback.")
         return _none_fallback()
+
+
+def _validate_steps(raw_steps) -> list:
+    """
+    Validate a steps array from multi-step LLM output.
+    - Must be a list of dicts
+    - Max 3 steps enforced
+    - Invalid individual steps are skipped (not crashed on)
+    - If all steps invalid, falls back to none
+    """
+    if not isinstance(raw_steps, list) or not raw_steps:
+        log.warning("[STEPS] 'steps' key exists but is not a non-empty list — fallback.")
+        return [_none_fallback()]
+
+    validated = []
+    for i, step in enumerate(raw_steps[:3]):   # hard cap at 3
+        if not isinstance(step, dict):
+            log.warning(f"[STEPS] Step {i} is not a dict — skipping.")
+            continue
+        action = str(step.get("action") or "none").strip().lower()
+        inp    = str(step.get("input")  or "").strip()
+        if action not in VALID_ACTIONS:
+            log.warning(f"[STEPS] Step {i} has unknown action '{action}' — skipping.")
+            continue
+        validated.append({"action": action, "input": inp})
+
+    if not validated:
+        log.warning("[STEPS] No valid steps found — fallback.")
+        return [_none_fallback()]
+
+    log.info(f"[STEPS] Validated {len(validated)} step(s).")
+    return validated
 
 
 def _none_fallback() -> dict:
