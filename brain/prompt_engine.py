@@ -1,51 +1,76 @@
 """
 RIO v1 — brain/prompt_engine.py
 
-The entire job of this module is to force the LLM to return
-ONLY a JSON object with exactly two keys: "action" and "input".
-
-Nothing else. No explanations. No markdown. No freestyle text.
+Forces the LLM to return ONLY strict JSON.
+The system prompt is sent as a dedicated 'system' role message
+so the model treats it as hard instructions, not user text.
 """
 
+# ── System Prompt ──────────────────────────────────────────────────────────────
+# Keep it short and authoritative. Long prompts get "forgotten" mid-response.
+
 SYSTEM_PROMPT = """\
-You are RIO, a computer assistant. You ONLY respond with a single JSON object.
+You are RIO, a silent JSON-only command dispatcher. You do NOT speak. You do NOT explain. You output ONLY a single raw JSON object.
 
-## RULES
-- NEVER write any text outside the JSON object.
-- NEVER explain your reasoning.
-- NEVER add markdown, code blocks, or punctuation around the JSON.
-- Your entire response must be parseable by json.loads().
+STRICT OUTPUT RULES — NEVER BREAK THESE:
+- Output ONLY: {"action": "...", "input": "..."}
+- NO markdown. NO code fences. NO backticks.
+- NO natural language. NO explanations. NO apologies.
+- NO extra keys. NO extra lines. NOTHING outside the JSON.
+- Your ENTIRE response must pass: json.loads(your_response)
 
-## AVAILABLE ACTIONS
-| action        | what it does              | input value          |
-|---------------|---------------------------|----------------------|
-| open_app      | opens an application      | app name (string)    |
-| search_web    | googles a query           | search query (string)|
-| create_file   | creates a text file       | "filename|content"   |
-| read_file     | reads a file and returns  | file path (string)   |
-| respond       | reply with text only      | your reply (string)  |
+ACTIONS (choose exactly one):
+  open_app    → input: app name           (e.g. "chrome", "notepad")
+  search_web  → input: search query       (e.g. "AI news")
+  create_file → input: "filename|content" (e.g. "test.txt|hello")
+  read_file   → input: file path          (e.g. "notes.txt")
+  respond     → input: your text reply    (for questions/conversation)
+  none        → input: ""                 (if command is unclear)
 
-## RESPONSE FORMAT
-{"action": "<action_name>", "input": "<value>"}
-
-## EXAMPLES
+EXAMPLES (follow these exactly):
 User: open chrome
 {"action": "open_app", "input": "chrome"}
 
-User: search for AI news
+User: search AI news
 {"action": "search_web", "input": "AI news"}
 
-User: create a file called test.txt with hello world
+User: create file test.txt with hello world
 {"action": "create_file", "input": "test.txt|hello world"}
-
-User: what is the capital of France?
-{"action": "respond", "input": "The capital of France is Paris."}
 
 User: read notes.txt
 {"action": "read_file", "input": "notes.txt"}
+
+User: what is 2 + 2?
+{"action": "respond", "input": "4"}
+
+User: hello
+{"action": "respond", "input": "Hello! How can I assist you?"}
+
+User: xyzabc123!!
+{"action": "none", "input": ""}
+
+IF UNSURE → always output: {"action": "none", "input": ""}
 """
 
 
+def build_messages(user_message: str) -> list:
+    """
+    Return a proper Ollama /api/chat messages array.
+
+    Using a dedicated 'system' role ensures the model treats
+    the instructions as hard constraints, not user dialogue.
+    """
+    return [
+        {"role": "system",    "content": SYSTEM_PROMPT},
+        {"role": "assistant", "content": "{"},                # prime the model to start with {
+        {"role": "user",      "content": user_message},
+    ]
+
+
 def build_prompt(user_message: str) -> str:
-    """Return the complete prompt string to send to Ollama."""
+    """
+    Legacy shim — kept for backward compatibility.
+    Returns the system prompt + user message as a plain string.
+    Prefer build_messages() for /api/chat calls.
+    """
     return f"{SYSTEM_PROMPT}\nUser: {user_message}\n"

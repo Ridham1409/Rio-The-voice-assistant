@@ -1,6 +1,7 @@
 """
 RIO v1 — brain/llm_client.py
-Sends a prompt to Ollama and returns the raw text response.
+Sends messages to Ollama /api/chat and returns the raw text response.
+Accepts either a pre-built messages list (preferred) or a plain string.
 One retry on timeout. Raises on connection failure.
 """
 
@@ -13,24 +14,34 @@ log = get_logger(__name__)
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
 
-def ask(prompt: str, cfg: dict) -> str:
+def ask(prompt, cfg: dict) -> str:
     """
-    Send prompt to Ollama. Returns the response string.
-    Raises ConnectionError if Ollama is not running.
-    Raises RuntimeError on bad response.
+    Send a message to Ollama /api/chat. Returns the response text.
+
+    Args:
+        prompt: Either a list of message dicts (preferred, uses system role)
+                or a plain str (wrapped as a single user message).
+        cfg:    Loaded config dict.
+
+    Raises:
+        ConnectionError: Ollama is not running.
+        RuntimeError:    Bad/timeout response.
     """
     llm_cfg = cfg.get("llm", {})
 
-    # FIX: /api/chat expects a messages array, not a flat prompt string
+    # Accept pre-built messages list OR legacy plain string
+    if isinstance(prompt, list):
+        messages = prompt          # already has system + user roles
+    else:
+        messages = [{"role": "user", "content": str(prompt)}]
+
     payload = {
         "model":   llm_cfg.get("model", "mistral"),
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
+        "messages": messages,
         "stream":  False,
         "options": {
             "temperature": llm_cfg.get("temperature", 0.1),
-            "num_predict": llm_cfg.get("max_tokens", 150),
+            "num_predict": llm_cfg.get("max_tokens", 200),
         },
     }
     timeout = llm_cfg.get("timeout", 30)

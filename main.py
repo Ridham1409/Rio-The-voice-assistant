@@ -33,7 +33,7 @@ def main():
     cfg = load_config()
 
     from core.logger    import get_logger
-    from brain          import ask, build_prompt, parse
+    from brain          import ask, build_messages, parse
     from agent          import execute
 
     log = get_logger("rio")
@@ -73,11 +73,12 @@ def main():
         log.info(f"[INPUT] {user_input!r}")
 
         try:
-            prompt = build_prompt(user_input)
+            # Build messages list with system + user roles
+            messages = build_messages(user_input)
 
             # ── Call LLM ─────────────────────────────────────────
             try:
-                raw = ask(prompt, cfg)
+                raw = ask(messages, cfg)
             except ConnectionError as e:
                 print(f"\n  [ERROR] {e}\n")
                 log.error(f"[LLM] Connection failed: {e}")
