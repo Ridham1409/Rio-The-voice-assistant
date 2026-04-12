@@ -9,7 +9,8 @@ from core.logger import get_logger
 
 log = get_logger(__name__)
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+# FIX: updated from /api/generate (deprecated) to /api/chat (current)
+OLLAMA_URL = "http://localhost:11434/api/chat"
 
 
 def ask(prompt: str, cfg: dict) -> str:
@@ -19,9 +20,13 @@ def ask(prompt: str, cfg: dict) -> str:
     Raises RuntimeError on bad response.
     """
     llm_cfg = cfg.get("llm", {})
+
+    # FIX: /api/chat expects a messages array, not a flat prompt string
     payload = {
-        "model":   llm_cfg.get("model", "llama3"),
-        "prompt":  prompt,
+        "model":   llm_cfg.get("model", "mistral"),
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
         "stream":  False,
         "options": {
             "temperature": llm_cfg.get("temperature", 0.1),
@@ -35,7 +40,12 @@ def ask(prompt: str, cfg: dict) -> str:
             log.info(f"Asking LLM (attempt {attempt})...")
             resp = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
             resp.raise_for_status()
-            text = resp.json().get("response", "").strip()
+            # FIX: /api/chat response path is message.content, not top-level response
+            data = resp.json()
+            text = (
+                data.get("message", {}).get("content", "")
+                or data.get("response", "")   # fallback for older Ollama builds
+            ).strip()
             log.info(f"LLM replied: {text[:80]}")
             return text
         except requests.exceptions.ConnectionError:

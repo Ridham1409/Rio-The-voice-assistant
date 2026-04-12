@@ -2,7 +2,7 @@
 
 llm:
   base_url: "http://localhost:11434"
-  model: "llama3"         # change to "mistral" if you prefer
+  model: "mistral"        # updated: mistral is the pulled model
   temperature: 0.1        # very low = deterministic JSON output
   max_tokens: 150         # short — we only need {"action":..., "input":...}
   timeout: 30
