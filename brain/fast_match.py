@@ -13,6 +13,23 @@ from core.logger import get_logger
 
 log = get_logger(__name__)
 
+# ── Control commands (highest priority — no LLM needed) ───────────────────────
+STOP_COMMANDS = {
+    "stop", "cancel", "wait", "enough", "quiet", "silence",
+    "shut up", "be quiet", "stop talking", "that's enough",
+    "pause", "halt",
+}
+_STOP_RE = re.compile(
+    r"^(?:please\s+)?(?:stop|cancel|wait|enough|quiet|silence|halt|pause|shut up|be quiet|stop talking)[\.!]*$",
+    re.IGNORECASE,
+)
+
+
+def is_stop_command(text: str) -> bool:
+    """Return True if text is a stop/cancel control command."""
+    t = text.strip().lower().rstrip(".! ")
+    return t in STOP_COMMANDS or bool(_STOP_RE.match(text.strip()))
+
 # ── Pattern table ──────────────────────────────────────────────────────────────
 # (compiled_regex, action, input_group)
 # input_group: int → regex capture group, str → literal value
@@ -48,13 +65,19 @@ def fast_match(text: str):
     Instantly match common command patterns without LLM.
 
     Returns:
-        dict  — single intent   {"action": str, "input": str}
-        list  — multi-step      [{"action": ...}, ...]
+        dict  {"action": "stop", ...}  — immediate stop/cancel command
+        dict  {"action": str, ...}     — single intent
+        list  [{...}, ...]             — multi-step
         None  — no match found (caller should fall through to LLM)
     """
     text = text.strip()
     if not text:
         return None
+
+    # ── HIGHEST PRIORITY: stop / cancel commands ──────────────────────────────
+    if is_stop_command(text):
+        log.info(f"[FAST] Stop command: {text!r}")
+        return {"action": "stop", "input": ""}
 
     # ── Try multi-step split first ───────────────────────────────────────────
     parts = _AND_SPLIT.split(text)

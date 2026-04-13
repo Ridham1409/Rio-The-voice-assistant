@@ -144,6 +144,13 @@ def execute(intent: dict, cfg: dict) -> str:
     elif action == "respond":
         return value or "(no response)"
 
+    # ── stop / cancel / wait — interrupt control ──────────────────────────────
+    # fast_match returns action="stop" for control commands.
+    # The server handles TTS interrupt directly; executor just returns silently.
+    elif action in ("stop", "cancel", "wait"):
+        log.info(f"[CMD] Control command: {action!r} — interrupting.")
+        return ""       # empty: server suppresses output for stop commands
+
     # ── unknown action ────────────────────────────────────────────────────────
     else:
         log.warning(f"[GUARD] Unrecognised action after parse: {action!r}")

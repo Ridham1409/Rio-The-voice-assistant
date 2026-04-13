@@ -30,11 +30,17 @@ class WakeWordDetector:
     """
     Runs continuously in a background daemon thread.
     Calls on_wake() (synchronous) when wake word detected.
-    on_wake must NOT block — use asyncio.run_coroutine_threadsafe if needed.
+
+    Args:
+        on_wake:      Callable fired on wake word detection.
+        interrupt_fn: Optional callable — called BEFORE on_wake to stop any
+                      in-progress TTS or active voice session. Pass
+                      stop_speaking / set an asyncio event etc.
     """
 
-    def __init__(self, on_wake):
+    def __init__(self, on_wake, interrupt_fn=None):
         self.on_wake       = on_wake
+        self.interrupt_fn  = interrupt_fn   # called first to cut speech
         self._running      = False
         self._thread       = None
         self._last_trigger = 0.0
@@ -111,6 +117,14 @@ class WakeWordDetector:
                     if ww in text:
                         log.info(f"[WAKE] Triggered! Phrase: {text!r}")
                         self._last_trigger = time.monotonic()
+                        # 1. Interrupt any ongoing TTS / session FIRST
+                        if self.interrupt_fn is not None:
+                            try:
+                                self.interrupt_fn()
+                                time.sleep(0.15)   # brief pause for SAPI5 to stop
+                            except Exception as e:
+                                log.error(f"[WAKE] interrupt_fn raised: {e}")
+                        # 2. Fire the new session
                         try:
                             self.on_wake()
                         except Exception as e:

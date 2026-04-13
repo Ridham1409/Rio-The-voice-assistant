@@ -15,6 +15,7 @@ State machine:
 
 import asyncio
 import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from pydantic import BaseModel
 
 from core.logger import get_logger
 from brain       import ask, build_messages, parse, fast_match
+from brain.fast_match import is_stop_command
 from agent       import execute_steps
 
 log = get_logger("api")
@@ -46,11 +48,12 @@ CFG = _load_cfg()
 
 # ── Global state ──────────────────────────────────────────────────────────────
 
-_state:       str              = "idle"
-_ws_clients:  set[WebSocket]   = set()
-_voice_lock:  asyncio.Lock     = None      # created inside event loop
-_wake_detector                 = None
-_event_loop:  asyncio.AbstractEventLoop = None
+_state:           str              = "idle"
+_ws_clients:      set[WebSocket]   = set()
+_voice_lock:      asyncio.Lock     = None      # created inside event loop
+_interrupt_event: threading.Event  = threading.Event()  # stops TTS + voice session
+_wake_detector                     = None
+_event_loop:      asyncio.AbstractEventLoop = None
 
 
 # ── State broadcast ───────────────────────────────────────────────────────────
@@ -93,6 +96,9 @@ async def run_voice_pipeline(loop: asyncio.AbstractEventLoop) -> str:
     from voice.stt import listen as stt_listen
     from voice.tts import speak   as tts_speak
 
+    # Clear any stale interrupt before we start
+    _interrupt_event.clear()
+
     # 1 — Record
     await set_state("listening")
     text = await loop.run_in_executor(None, lambda: stt_listen(duration=5.0))
@@ -102,20 +108,47 @@ async def run_voice_pipeline(loop: asyncio.AbstractEventLoop) -> str:
         await set_state("idle")
         return ""
 
-    # 2 — Process
+    # 2 — Instant stop command check (no LLM, instant response)
+    if is_stop_command(text):
+        log.info("[VOICE] Stop command heard — aborting session.")
+        _interrupt_event.set()
+        await set_state("idle")
+        return ""
+
+    # 3 — Process
     await set_state("processing")
+    # Bail out early if interrupted while waiting for LLM
+    if _interrupt_event.is_set():
+        await set_state("idle")
+        return ""
     result = await loop.run_in_executor(None, _process_text_sync, text)
     log.info(f"[VOICE] Result: {result!r}")
 
-    # 3 — Speak
-    await set_state("speaking")
-    await loop.run_in_executor(None, tts_speak, result)
+    # 4 — Speak (interruptible)
+    if not _interrupt_event.is_set():
+        await set_state("speaking")
+        await loop.run_in_executor(
+            None,
+            lambda: tts_speak(result, extra_stop=_interrupt_event),
+        )
 
     await set_state("idle")
     return result
 
 
 # ── Wake word callback (called from background thread) ────────────────────────
+
+def _interrupt_fn():
+    """
+    Stop any ongoing TTS and signal the voice session to abort.
+    Called by WakeWordDetector just before firing on_wake(),
+    allowing wake word to interrupt speaking.
+    """
+    from voice.tts import stop_speaking
+    _interrupt_event.set()
+    stop_speaking()
+    log.info("[WAKE] Interrupt sent before new session.")
+
 
 def _on_wake():
     """Dispatched from WakeWordDetector daemon thread → async event loop."""
@@ -148,7 +181,7 @@ async def lifespan(app: FastAPI):
     # Optionally start wake word detector
     try:
         from voice.wake_word import WakeWordDetector
-        _wake_detector = WakeWordDetector(on_wake=_on_wake)
+        _wake_detector = WakeWordDetector(on_wake=_on_wake, interrupt_fn=_interrupt_fn)
         _wake_detector.start()
     except Exception as e:
         log.warning(f"[WAKE] Wake word disabled (mic/deps issue): {e}")
@@ -212,6 +245,15 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=400, detail="message cannot be empty")
 
     log.info(f"[API] /chat: {text!r}")
+
+    # ── Instant stop command — no state change needed, just kill TTS ──────────
+    if is_stop_command(text):
+        from voice.tts import stop_speaking
+        _interrupt_event.set()
+        stop_speaking()
+        await set_state("idle")
+        return ChatResponse(response="Okay, stopping.", source="fast")
+
     await set_state("processing")
 
     try:
