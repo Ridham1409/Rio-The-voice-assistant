@@ -495,3 +495,196 @@ kbd {
         padding: 20px;
     }
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Mic Button
+   ────────────────────────────────────────────────────────────────────────── */
+.mic-btn {
+    width: 44px;
+    height: 44px;
+    border-radius: 13px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--glass-border);
+    color: var(--text-dim);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    margin-right: 6px;
+    position: relative;
+}
+
+.mic-btn:hover {
+    color: var(--primary);
+    border-color: var(--primary);
+    background: rgba(0, 207, 255, 0.08);
+}
+
+/* Listening state — green glow */
+.mic-btn.listening {
+    color: #00FF99;
+    border-color: #00FF99;
+    background: rgba(0, 255, 153, 0.1);
+    animation: micPulse 1s ease-in-out infinite;
+}
+
+/* Processing state — amber spin */
+.mic-btn.processing {
+    color: #FFB800;
+    border-color: #FFB800;
+    background: rgba(255, 184, 0, 0.1);
+    animation: micSpin 1.2s linear infinite;
+}
+
+/* Speaking state — blue glow */
+.mic-btn.speaking {
+    color: var(--primary);
+    border-color: var(--primary);
+    background: rgba(0, 207, 255, 0.12);
+    animation: micPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes micPulse {
+    0%, 100% { box-shadow: 0 0 6px currentColor; transform: scale(1); }
+    50%       { box-shadow: 0 0 18px currentColor; transform: scale(1.06); }
+}
+@keyframes micSpin {
+    0%   { box-shadow: 0 0 8px rgba(255,184,0,0.4); }
+    100% { box-shadow: 0 0 16px rgba(255,184,0,0.8); }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Voice Overlay (ripple rings shown inside chat viewport)
+   ────────────────────────────────────────────────────────────────────────── */
+.voice-overlay {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: none;             /* hidden by default — JS toggles */
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    z-index: 10;
+    pointer-events: none;
+}
+
+.voice-overlay.visible {
+    display: flex;
+}
+
+.ripple-ring {
+    position: absolute;
+    border-radius: 50%;
+    border: 2px solid var(--primary);
+    opacity: 0;
+    animation: rippleExpand 2s ease-out infinite;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.ripple-ring.r1 { width: 40px; height: 40px; animation-delay: 0s; }
+.ripple-ring.r2 { width: 40px; height: 40px; animation-delay: 0.6s; }
+.ripple-ring.r3 { width: 40px; height: 40px; animation-delay: 1.2s; }
+
+@keyframes rippleExpand {
+    0%   { transform: translate(-50%, -50%) scale(1);   opacity: 0.8; }
+    100% { transform: translate(-50%, -50%) scale(4.5); opacity: 0; }
+}
+
+.voice-overlay-label {
+    margin-top: 40px;
+    font-size: 12px;
+    font-family: 'Orbitron', sans-serif;
+    color: var(--primary);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    animation: labelFade 1.5s ease-in-out infinite;
+}
+
+@keyframes labelFade {
+    0%, 100% { opacity: 0.5; }
+    50%       { opacity: 1; }
+}
+
+/* Speaking overlay — amber rings */
+.voice-overlay.speaking .ripple-ring { border-color: #FFB800; }
+.voice-overlay.speaking .voice-overlay-label { color: #FFB800; }
+
+/* Processing overlay — subtle purple rings */
+.voice-overlay.processing .ripple-ring { border-color: var(--secondary); }
+.voice-overlay.processing .voice-overlay-label { color: var(--secondary); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Avatar voice states
+   ────────────────────────────────────────────────────────────────────────── */
+.rio-avatar.listening {
+    box-shadow: 0 0 40px rgba(0, 255, 153, 0.6), 0 0 80px rgba(0, 255, 153, 0.2);
+    animation: avatarListening 1s ease-in-out infinite;
+}
+.rio-avatar.speaking {
+    box-shadow: 0 0 40px rgba(0, 207, 255, 0.8), 0 0 80px rgba(0, 207, 255, 0.3);
+    animation: avatarSpeaking 0.8s ease-in-out infinite;
+}
+.rio-avatar.processing {
+    box-shadow: 0 0 30px rgba(255, 184, 0, 0.5);
+    animation: avatarProcessing 1.5s linear infinite;
+}
+
+@keyframes avatarListening {
+    0%, 100% { transform: scale(1); }
+    50%       { transform: scale(1.04); }
+}
+@keyframes avatarSpeaking {
+    0%, 100% { transform: scale(1); }
+    50%       { transform: scale(1.06); }
+}
+@keyframes avatarProcessing {
+    0%   { filter: hue-rotate(0deg); }
+    100% { filter: hue-rotate(360deg); }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Wake-word hint pill
+   ────────────────────────────────────────────────────────────────────────── */
+.wake-hint {
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--text-dim);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    padding: 8px 16px;
+    border-radius: 20px;
+    display: inline-block;
+}
+
+.wake-hint kbd {
+    color: var(--primary);
+    background: rgba(0, 207, 255, 0.1);
+    border-color: rgba(0, 207, 255, 0.3);
+}
+
+.mic-emoji {
+    font-size: 14px;
+}
+
+/* Input actions gap */
+.input-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Status dot voice states */
+.status-indicator.listening {
+    background: #00FF99;
+    box-shadow: 0 0 10px rgba(0, 255, 153, 0.8);
+    animation: statusPulse 0.6s infinite;
+}
+.status-indicator.speaking {
+    background: var(--primary);
+    box-shadow: 0 0 10px rgba(0, 207, 255, 0.8);
+    animation: statusPulse 1s infinite;
+}

@@ -6,7 +6,7 @@ llm:
   temperature: 0.0        # greedy decoding — fastest + most deterministic
   max_tokens: 60          # JSON reply is tiny; 60 tokens is plenty
   timeout: 90             # full timeout (retry attempt)
-  fast_timeout: 20        # first-attempt timeout — returns fallback if exceeded
+  fast_timeout: 45        # first-attempt timeout — returns fallback if exceeded
 
 actions:
   chrome_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
