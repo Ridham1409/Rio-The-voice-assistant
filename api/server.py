@@ -34,6 +34,8 @@ from pydantic import BaseModel
 from core.logger import get_logger
 from brain       import ask, build_messages, parse, fast_match
 from brain.fast_match import is_stop_command
+from brain.corrector  import correct_text
+
 from agent       import execute_steps
 
 log = get_logger("api")
@@ -74,20 +76,33 @@ async def set_state(state: str) -> None:
 # ── Voice pipeline (async, runs on event loop) ────────────────────────────────
 
 def _process_text_sync(text: str) -> str:
-    """Synchronous text → result (runs in thread pool via run_in_executor)."""
-    intent = fast_match(text)
-    if intent is not None:
-        log.info(f"[FLOW] fast_match hit — skipping LLM")
-        return execute_steps(intent, CFG)
+    """Synchronous text → result. Runs in thread pool — must never raise."""
     try:
+        # Layer 0: STT correction (phonetic mishearing fix)
+        corrected, was_fixed = correct_text(text)
+        if was_fixed:
+            log.info(f"[CORRECT] {text!r} → {corrected!r}")
+            text = corrected
+
+        # Layer 1: fast regex match (< 1ms, no LLM)
+        intent = fast_match(text)
+        if intent is not None:
+            log.info("[FLOW] fast_match hit — skipping LLM")
+            return execute_steps(intent, CFG)
+
+        # Layer 2: LLM
         log.info(f"[FLOW] Sending to LLM: {text!r}")
         messages = build_messages(text)
         raw      = ask(messages, CFG)
         intent   = parse(raw)
         return execute_steps(intent, CFG)
+
+    except ConnectionError:
+        log.error("[FLOW] Ollama not reachable — is 'ollama serve' running?")
+        return "I can't reach the AI model right now. Please start Ollama and try again."
     except Exception as e:
-        log.error(f"[FLOW] Pipeline error: {e}")
-        return "Sorry, I couldn't process that command."
+        log.error(f"[FLOW] Pipeline error: {e}", exc_info=True)
+        return "Something went wrong while processing your command. Please try again."
 
 
 async def run_voice_pipeline(
@@ -97,60 +112,74 @@ async def run_voice_pipeline(
     """
     Full listen → process → speak cycle.
     Must be called while holding _voice_lock.
-
-    Args:
-        pre_listening: If True the caller already emitted state=listening,
-                       so we skip the redundant set here (avoids a ~1 frame
-                       WebSocket flicker and makes the UI react sooner).
+    GUARANTEED to return and reset state to idle, even if a component crashes.
     """
     from voice.stt import listen as stt_listen
     from voice.tts import speak   as tts_speak
 
     _interrupt_event.clear()
-
     log.info("[FLOW] ---- Voice session started ----")
 
-    # 1 — Record (skip set_state if already emitted by _on_wake)
-    if not pre_listening:
-        await set_state("listening")
-    text = await loop.run_in_executor(None, lambda: stt_listen(duration=5.0))
+    try:
+        # 1 — Record
+        if not pre_listening:
+            await set_state("listening")
+        try:
+            text = await loop.run_in_executor(None, lambda: stt_listen(duration=5.0))
+        except Exception as e:
+            log.error(f"[VOICE] STT failed: {e}", exc_info=True)
+            await set_state("idle")
+            return ""
 
-    if not text.strip():
-        log.info("[FLOW] No speech — session ended.")
-        await set_state("idle")
+        if not text.strip():
+            log.info("[FLOW] No speech — session ended.")
+            await set_state("idle")
+            return ""
+
+        log.info(f"[FLOW] Heard: {text!r}")
+
+        # 2 — Stop command check
+        if is_stop_command(text):
+            log.info("[FLOW] Stop command — aborting session.")
+            _interrupt_event.set()
+            await set_state("idle")
+            return ""
+
+        # 3 — Process
+        await set_state("processing")
+        if _interrupt_event.is_set():
+            log.info("[FLOW] Interrupted before processing.")
+            await set_state("idle")
+            return ""
+        try:
+            result = await loop.run_in_executor(None, _process_text_sync, text)
+        except Exception as e:
+            log.error(f"[VOICE] Processing failed: {e}", exc_info=True)
+            result = "Sorry, something went wrong while processing your command."
+
+        # 4 — Speak
+        if not _interrupt_event.is_set() and result:
+            await set_state("speaking")
+            try:
+                await loop.run_in_executor(
+                    None,
+                    lambda: tts_speak(result, extra_stop=_interrupt_event),
+                )
+            except Exception as e:
+                log.error(f"[VOICE] TTS failed: {e}", exc_info=True)
+        elif _interrupt_event.is_set():
+            log.info("[FLOW] Interrupted before speaking.")
+
+        return result
+
+    except Exception as e:
+        # Outer safety net — should never reach here, but guarantees state reset
+        log.error(f"[VOICE] Unexpected pipeline crash: {e}", exc_info=True)
         return ""
-
-    log.info(f"[FLOW] Heard: {text!r}")
-
-    # 2 — Instant stop command check (no LLM, instant response)
-    if is_stop_command(text):
-        log.info("[FLOW] Stop command — aborting session.")
-        _interrupt_event.set()
+    finally:
+        # ALWAYS reset state, even if an exception escaped all inner handlers
         await set_state("idle")
-        return ""
-
-    # 3 — Process
-    await set_state("processing")
-    # Bail out early if interrupted while waiting for LLM
-    if _interrupt_event.is_set():
-        log.info("[FLOW] Interrupted before processing.")
-        await set_state("idle")
-        return ""
-    result = await loop.run_in_executor(None, _process_text_sync, text)
-
-    # 4 — Speak (interruptible)
-    if not _interrupt_event.is_set():
-        await set_state("speaking")
-        await loop.run_in_executor(
-            None,
-            lambda: tts_speak(result, extra_stop=_interrupt_event),
-        )
-    else:
-        log.info("[FLOW] Interrupted before speaking.")
-
-    await set_state("idle")
-    log.info("[FLOW] ---- Voice session ended ----")
-    return result
+        log.info("[FLOW] ---- Voice session ended ----")
 
 
 # ── Wake word callback (called from background thread) ────────────────────────
@@ -268,11 +297,12 @@ async def health():
 async def chat(req: ChatRequest):
     text = req.message.strip()
     if not text:
-        raise HTTPException(status_code=400, detail="message cannot be empty")
+        # Return safe response instead of HTTP 400
+        return ChatResponse(response="Please type a command.", source="error")
 
     log.info(f"[API] /chat: {text!r}")
 
-    # ── Instant stop command — no state change needed, just kill TTS ──────────
+    # ── Instant stop command ─────────────────────────────────────────────────────────
     if is_stop_command(text):
         from voice.tts import stop_speaking
         _interrupt_event.set()
@@ -283,6 +313,12 @@ async def chat(req: ChatRequest):
     await set_state("processing")
 
     try:
+        # STT correction (also helps typed typos against known commands)
+        corrected, was_fixed = correct_text(text)
+        if was_fixed:
+            log.info(f"[CORRECT] {text!r} → {corrected!r}")
+            text = corrected
+
         # Fast-match path
         intent = fast_match(text)
         if intent is not None:
@@ -293,20 +329,33 @@ async def chat(req: ChatRequest):
         # LLM path
         loop     = asyncio.get_event_loop()
         messages = build_messages(text)
-        raw      = await loop.run_in_executor(None, lambda: ask(messages, CFG))
-        intent   = parse(raw)
-        result   = execute_steps(intent, CFG)
+        try:
+            raw = await loop.run_in_executor(None, lambda: ask(messages, CFG))
+        except ConnectionError:
+            log.error("[API] Ollama not reachable.")
+            await set_state("idle")
+            return ChatResponse(
+                response="I can't reach the AI model. Is Ollama running? Start with: ollama serve",
+                source="error",
+            )
+
+        try:
+            intent = parse(raw)
+        except Exception as e:
+            log.error(f"[API] Parse failed: {e}  raw={raw!r}")
+            await set_state("idle")
+            return ChatResponse(response="I received an unexpected response. Please try again.", source="error")
+
+        result = execute_steps(intent, CFG)
         log.info(f"[API] Result: {result!r}")
         await set_state("idle")
         return ChatResponse(response=result, source="llm")
 
-    except ConnectionError as e:
-        await set_state("idle")
-        raise HTTPException(status_code=503, detail="Ollama is not running. Start with: ollama serve")
     except Exception as e:
+        # Catch-all: log full traceback, return safe message, never raise 500
+        log.error(f"[API] Unhandled error in /chat: {e}", exc_info=True)
         await set_state("idle")
-        log.error(f"[API] Error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal error. Please try again.")
+        return ChatResponse(response="Something went wrong. Please try again.", source="error")
 
 
 @app.post("/voice/trigger")
@@ -314,13 +363,21 @@ async def voice_trigger():
     """Manually trigger voice recording from the mic button in the UI."""
     global _voice_lock
     if _voice_lock is None:
-        raise HTTPException(status_code=503, detail="Voice system not initialised.")
+        log.error("[API] /voice/trigger called before voice system initialised.")
+        return {"status": "error", "response": "Voice system not yet ready. Try again in a moment."}
+
     if _voice_lock.locked():
-        return {"status": "busy", "message": "Voice session already active."}
-    async with _voice_lock:
-        loop   = asyncio.get_event_loop()
-        result = await run_voice_pipeline(loop)
-    return {"status": "ok", "response": result}
+        return {"status": "busy", "response": "A voice session is already active."}
+
+    try:
+        async with _voice_lock:
+            loop   = asyncio.get_event_loop()
+            result = await run_voice_pipeline(loop)
+        return {"status": "ok", "response": result}
+    except Exception as e:
+        log.error(f"[API] /voice/trigger crashed: {e}", exc_info=True)
+        await set_state("idle")   # guarantee state reset
+        return {"status": "error", "response": "Voice processing failed. Please try again."}
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
