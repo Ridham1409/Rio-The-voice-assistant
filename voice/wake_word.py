@@ -1,14 +1,13 @@
 """
 RIO v1 — voice/wake_word.py
-Lightweight wake word detector.
+Reliable wake word detector with false-trigger prevention.
 
-Strategy:
-  - Record 2-second audio chunks in a background daemon thread
-  - Skip silent chunks via RMS energy gate (near-zero CPU on silence)
-  - Run faster-whisper tiny.en on speech chunks (shared model from stt.py)
-  - Fire on_wake() callback when "hey rio" / "hello rio" detected
-
-CPU usage: zero on silence, brief burst on speech only.
+Matching rules (ALL must pass to trigger):
+  1. RMS energy gate   — must exceed SILENCE_THRESH
+  2. Minimum length    — transcription must have >= MIN_WORDS words
+  3. Position check    — wake phrase must start within first MAX_PREFIX_WORDS
+  4. Confidence gate   — Whisper avg_logprob must exceed MIN_CONFIDENCE
+  5. Cooldown          — no re-trigger within COOLDOWN_SECS seconds
 """
 
 import re
@@ -19,23 +18,41 @@ import numpy as np
 import sounddevice as sd
 from core.logger import get_logger
 
-log = get_logger(__name__, level=logging.DEBUG)   # DEBUG so RMS values show
+log = get_logger(__name__, level=logging.DEBUG)
 
-# ── Tunable constants ─────────────────────────────────────────────────────────
+# ── Constants ─────────────────────────────────────────────────────────────────
 
-WAKE_WORDS     = {"hey rio", "hello rio", "hi rio", "okay rio", "ok rio", "rio"}
-CHUNK_SECS     = 2          # detection window size
-SAMPLE_RATE    = 16000
-SILENCE_THRESH = 0.003      # ↓ was 0.008 — typical speech RMS is 0.01–0.05
-COOLDOWN_SECS  = 4          # seconds before re-triggering allowed
+WAKE_WORDS      = {"hey rio", "hello rio", "hi rio"}   # "rio" alone removed — too noisy
+CHUNK_SECS      = 2.5         # slightly longer window → better context
+SAMPLE_RATE     = 16000
+SILENCE_THRESH  = 0.003       # RMS below this = silence, skip Whisper
+MIN_WORDS       = 2           # ignore single-word clips ("hmm", noise bursts)
+MAX_PREFIX_WORDS = 4          # wake phrase must start within first N words
+MIN_CONFIDENCE  = -0.7        # Whisper avg_logprob; -0.7 = reasonable, < -1.0 = guessing
+COOLDOWN_SECS   = 5           # seconds between triggers
 
-# Punctuation stripper — Whisper often adds commas/periods
+# Strip punctuation before matching
 _PUNCT = re.compile(r"[^\w\s]")
 
 
 def _clean(text: str) -> str:
     """Lowercase + strip punctuation for robust matching."""
     return _PUNCT.sub("", text).lower().strip()
+
+
+def _position_ok(clean_text: str, wake_word: str) -> bool:
+    """
+    Return True if `wake_word` starts within the first MAX_PREFIX_WORDS words.
+    Handles slight Whisper preambles like "Um, hey RIO..." gracefully.
+    """
+    words    = clean_text.split()
+    ww_words = wake_word.split()
+    ww_len   = len(ww_words)
+    limit    = min(MAX_PREFIX_WORDS, max(0, len(words) - ww_len + 1))
+    for start in range(limit):
+        if words[start : start + ww_len] == ww_words:
+            return True
+    return False
 
 
 def _print_mic_info() -> None:
@@ -55,7 +72,7 @@ class WakeWordDetector:
     Args:
         on_wake:      Callable fired on wake word detection.
         interrupt_fn: Optional callable — called BEFORE on_wake to stop any
-                      in-progress TTS or active voice session.
+                      in-progress TTS or voice session.
     """
 
     def __init__(self, on_wake, interrupt_fn=None):
@@ -71,7 +88,6 @@ class WakeWordDetector:
         if self._running:
             return
         _print_mic_info()
-        # Pre-warm the shared Whisper model in a thread so startup is non-blocking
         threading.Thread(target=self._prewarm, daemon=True).start()
         self._running = True
         self._thread  = threading.Thread(
@@ -80,7 +96,11 @@ class WakeWordDetector:
             name   = "RIO-WakeWord",
         )
         self._thread.start()
-        log.info(f"[WAKE] Detector active (threshold={SILENCE_THRESH}) — say 'Hey RIO'.")
+        log.info(
+            f"[WAKE] Detector active  thresh={SILENCE_THRESH}  "
+            f"min_words={MIN_WORDS}  min_conf={MIN_CONFIDENCE}  "
+            f"cooldown={COOLDOWN_SECS}s  words={sorted(WAKE_WORDS)}"
+        )
 
     def stop(self):
         self._running = False
@@ -90,7 +110,6 @@ class WakeWordDetector:
 
     @staticmethod
     def _prewarm():
-        """Load the Whisper model now so first detection isn't slow."""
         try:
             from voice.stt import _get_model
             _get_model()
@@ -98,12 +117,28 @@ class WakeWordDetector:
         except Exception as e:
             log.warning(f"[WAKE] Pre-warm failed: {e}")
 
+    @staticmethod
+    def _transcribe_with_confidence(float_audio: np.ndarray):
+        """
+        Transcribe float32 audio and return (clean_text, avg_logprob).
+        Bypasses stt.transcribe_float to access per-segment confidence.
+        """
+        from voice.stt import _get_model
+        model = _get_model()
+        segments, _ = model.transcribe(float_audio, beam_size=1, language="en")
+        segs = list(segments)      # materialise to get logprob
+        if not segs:
+            return "", 0.0
+        avg_logprob = sum(s.avg_logprob for s in segs) / len(segs)
+        text = " ".join(s.text for s in segs).strip()
+        return text, avg_logprob
+
     def _loop(self):
         chunk_num = 0
 
         while self._running:
             try:
-                # ── Record a chunk ────────────────────────────────────────────
+                # ── 1. Record chunk ───────────────────────────────────────────
                 audio = sd.rec(
                     int(SAMPLE_RATE * CHUNK_SECS),
                     samplerate = SAMPLE_RATE,
@@ -119,59 +154,74 @@ class WakeWordDetector:
                 float_audio = audio.astype(np.float32).flatten() / 32768.0
                 rms = float(np.sqrt(np.mean(float_audio ** 2)))
 
-                # ── RMS debug log (every chunk, dimmed via DEBUG level) ────────
                 log.debug(f"[WAKE] chunk #{chunk_num:04d}  rms={rms:.4f}  thresh={SILENCE_THRESH}")
 
-                # ── Energy gate ───────────────────────────────────────────────
+                # ── 2. Energy gate ────────────────────────────────────────────
                 if rms < SILENCE_THRESH:
-                    continue    # silent — skip Whisper completely
-
-                # ── Cooldown ──────────────────────────────────────────────────
-                now = time.monotonic()
-                if now - self._last_trigger < COOLDOWN_SECS:
-                    log.debug("[WAKE] In cooldown — skipping.")
                     continue
 
-                # ── Transcribe ────────────────────────────────────────────────
-                log.debug(f"[WAKE] chunk #{chunk_num:04d} has speech (rms={rms:.4f}) — transcribing...")
-                from voice.stt import transcribe_float
-                raw_text   = transcribe_float(float_audio)
+                # ── 3. Cooldown ───────────────────────────────────────────────
+                now = time.monotonic()
+                if now - self._last_trigger < COOLDOWN_SECS:
+                    log.debug(f"[WAKE] Cooldown ({COOLDOWN_SECS - (now - self._last_trigger):.1f}s left) — skip.")
+                    continue
+
+                # ── 4. Transcribe + confidence ────────────────────────────────
+                log.debug(f"[WAKE] Speech detected (rms={rms:.4f}) — transcribing...")
+                raw_text, avg_logprob = self._transcribe_with_confidence(float_audio)
                 clean_text = _clean(raw_text)
 
                 if not clean_text:
-                    log.debug("[WAKE] Transcription empty.")
+                    log.debug("[WAKE] Transcription empty — skip.")
                     continue
 
-                log.info(f"[WAKE] Heard: {raw_text!r}  (cleaned: {clean_text!r})")
-
-                # ── Wake word match ────────────────────────────────────────────
-                matched = next(
-                    (ww for ww in WAKE_WORDS if ww in clean_text),
-                    None,
+                log.info(
+                    f"[WAKE] Heard: {raw_text!r}  "
+                    f"conf={avg_logprob:.3f}  words={len(clean_text.split())}"
                 )
 
-                if matched:
-                    log.info(f"[WAKE] >>> Triggered! matched={matched!r} in {raw_text!r}")
-                    self._last_trigger = time.monotonic()
+                # ── 5. Minimum word count ─────────────────────────────────────
+                if len(clean_text.split()) < MIN_WORDS:
+                    log.debug(f"[WAKE] Too short ({len(clean_text.split())} word(s) < {MIN_WORDS}) — skip.")
+                    continue
 
-                    # 1. Interrupt any ongoing TTS / session FIRST
-                    if self.interrupt_fn is not None:
-                        try:
-                            self.interrupt_fn()
-                            time.sleep(0.15)   # brief pause for SAPI5 to stop
-                        except Exception as e:
-                            log.error(f"[WAKE] interrupt_fn raised: {e}")
+                # ── 6. Confidence gate ────────────────────────────────────────
+                if avg_logprob < MIN_CONFIDENCE:
+                    log.debug(f"[WAKE] Low confidence ({avg_logprob:.3f} < {MIN_CONFIDENCE}) — skip.")
+                    continue
 
-                    # 2. Fire the new session
+                # ── 7. Wake word + position check ────────────────────────────
+                matched = None
+                for ww in WAKE_WORDS:
+                    if ww in clean_text and _position_ok(clean_text, ww):
+                        matched = ww
+                        break
+
+                if not matched:
+                    log.debug(f"[WAKE] No wake word at start of: {clean_text!r}")
+                    continue
+
+                # ── All checks passed — TRIGGER ───────────────────────────────
+                log.info(
+                    f"[WAKE] >>> TRIGGERED  matched={matched!r}  "
+                    f"conf={avg_logprob:.3f}  phrase={raw_text!r}"
+                )
+                self._last_trigger = time.monotonic()
+
+                if self.interrupt_fn is not None:
                     try:
-                        self.on_wake()
+                        self.interrupt_fn()
+                        time.sleep(0.15)
                     except Exception as e:
-                        log.error(f"[WAKE] on_wake() raised: {e}")
-                else:
-                    log.debug(f"[WAKE] No wake word in: {clean_text!r}")
+                        log.error(f"[WAKE] interrupt_fn raised: {e}")
+
+                try:
+                    self.on_wake()
+                except Exception as e:
+                    log.error(f"[WAKE] on_wake() raised: {e}")
 
             except KeyboardInterrupt:
                 break
             except Exception as e:
                 log.error(f"[WAKE] Detection loop error: {e}")
-                time.sleep(1.0)     # brief back-off on error
+                time.sleep(1.0)
