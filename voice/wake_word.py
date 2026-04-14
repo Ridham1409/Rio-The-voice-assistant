@@ -23,7 +23,7 @@ log = get_logger(__name__, level=logging.DEBUG)
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 WAKE_WORDS      = {"hey rio", "hello rio", "hi rio"}   # "rio" alone removed — too noisy
-CHUNK_SECS      = 2.5         # slightly longer window → better context
+CHUNK_SECS      = 1.5         # shorter = faster detection; min ~1.0 for Whisper context
 SAMPLE_RATE     = 16000
 SILENCE_THRESH  = 0.003       # RMS below this = silence, skip Whisper
 MIN_WORDS       = 2           # ignore single-word clips ("hmm", noise bursts)

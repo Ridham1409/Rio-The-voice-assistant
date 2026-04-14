@@ -90,21 +90,29 @@ def _process_text_sync(text: str) -> str:
         return "Sorry, I couldn't process that command."
 
 
-async def run_voice_pipeline(loop: asyncio.AbstractEventLoop) -> str:
+async def run_voice_pipeline(
+    loop:          asyncio.AbstractEventLoop,
+    pre_listening: bool = False,
+) -> str:
     """
     Full listen → process → speak cycle.
     Must be called while holding _voice_lock.
+
+    Args:
+        pre_listening: If True the caller already emitted state=listening,
+                       so we skip the redundant set here (avoids a ~1 frame
+                       WebSocket flicker and makes the UI react sooner).
     """
     from voice.stt import listen as stt_listen
     from voice.tts import speak   as tts_speak
 
-    # Clear any stale interrupt before we start
     _interrupt_event.clear()
 
     log.info("[FLOW] ---- Voice session started ----")
 
-    # 1 — Record
-    await set_state("listening")
+    # 1 — Record (skip set_state if already emitted by _on_wake)
+    if not pre_listening:
+        await set_state("listening")
     text = await loop.run_in_executor(None, lambda: stt_listen(duration=5.0))
 
     if not text.strip():
@@ -167,6 +175,15 @@ def _on_wake():
     if _voice_lock.locked():
         log.debug("[WAKE] Voice already active — ignoring trigger.")
         return
+
+    # ── IMMEDIATE UI feedback — fires before pipeline even starts ──────────────
+    # set_state pushes {"state": "listening"} to every WebSocket client right
+    # now, so the UI animation starts at wake-word detection, not after the
+    # lock is acquired and listen() begins.
+    asyncio.run_coroutine_threadsafe(set_state("listening"), _event_loop)
+    log.info("[WAKE] UI notified: listening (pre-pipeline)")
+
+    # Now schedule the full pipeline (will re-use the listening state)
     asyncio.run_coroutine_threadsafe(_handle_wake(), _event_loop)
 
 
@@ -176,7 +193,7 @@ async def _handle_wake():
         return
     async with _voice_lock:
         loop = asyncio.get_event_loop()
-        await run_voice_pipeline(loop)
+        await run_voice_pipeline(loop, pre_listening=True)  # state already emitted
 
 
 # ── Lifespan (startup / shutdown) ─────────────────────────────────────────────
