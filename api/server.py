@@ -77,14 +77,16 @@ def _process_text_sync(text: str) -> str:
     """Synchronous text → result (runs in thread pool via run_in_executor)."""
     intent = fast_match(text)
     if intent is not None:
+        log.info(f"[FLOW] fast_match hit — skipping LLM")
         return execute_steps(intent, CFG)
     try:
+        log.info(f"[FLOW] Sending to LLM: {text!r}")
         messages = build_messages(text)
         raw      = ask(messages, CFG)
         intent   = parse(raw)
         return execute_steps(intent, CFG)
     except Exception as e:
-        log.error(f"[VOICE] Pipeline error: {e}")
+        log.error(f"[FLOW] Pipeline error: {e}")
         return "Sorry, I couldn't process that command."
 
 
@@ -99,18 +101,22 @@ async def run_voice_pipeline(loop: asyncio.AbstractEventLoop) -> str:
     # Clear any stale interrupt before we start
     _interrupt_event.clear()
 
+    log.info("[FLOW] ---- Voice session started ----")
+
     # 1 — Record
     await set_state("listening")
     text = await loop.run_in_executor(None, lambda: stt_listen(duration=5.0))
-    log.info(f"[VOICE] Heard: {text!r}")
 
     if not text.strip():
+        log.info("[FLOW] No speech — session ended.")
         await set_state("idle")
         return ""
 
+    log.info(f"[FLOW] Heard: {text!r}")
+
     # 2 — Instant stop command check (no LLM, instant response)
     if is_stop_command(text):
-        log.info("[VOICE] Stop command heard — aborting session.")
+        log.info("[FLOW] Stop command — aborting session.")
         _interrupt_event.set()
         await set_state("idle")
         return ""
@@ -119,10 +125,10 @@ async def run_voice_pipeline(loop: asyncio.AbstractEventLoop) -> str:
     await set_state("processing")
     # Bail out early if interrupted while waiting for LLM
     if _interrupt_event.is_set():
+        log.info("[FLOW] Interrupted before processing.")
         await set_state("idle")
         return ""
     result = await loop.run_in_executor(None, _process_text_sync, text)
-    log.info(f"[VOICE] Result: {result!r}")
 
     # 4 — Speak (interruptible)
     if not _interrupt_event.is_set():
@@ -131,8 +137,11 @@ async def run_voice_pipeline(loop: asyncio.AbstractEventLoop) -> str:
             None,
             lambda: tts_speak(result, extra_stop=_interrupt_event),
         )
+    else:
+        log.info("[FLOW] Interrupted before speaking.")
 
     await set_state("idle")
+    log.info("[FLOW] ---- Voice session ended ----")
     return result
 
 

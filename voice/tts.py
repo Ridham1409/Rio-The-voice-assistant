@@ -88,10 +88,10 @@ def speak(text: str, extra_stop: threading.Event = None) -> None:
     if not clean:
         return
 
+    log.info(f"[TTS] Speaking: \"{clean[:50]}{'...' if len(clean)>50 else ''}\"")
+
     # Clear any stale stop signal before we start
     _stop_event.clear()
-
-    log.info(f"[TTS] Speaking: {clean[:60]}...")
 
     # ── Run engine in a daemon thread so we can interrupt it ─────────────────
     _done = threading.Event()
@@ -113,7 +113,7 @@ def speak(text: str, extra_stop: threading.Event = None) -> None:
     # ── Poll for interrupt every 50ms ─────────────────────────────────────────
     while not _done.wait(timeout=0.05):
         if _stop_event.is_set():
-            log.info("[TTS] Interrupted by _stop_event.")
+            log.info("[TTS] Interrupted by stop signal.")
             try:
                 engine.stop()
             except Exception:
@@ -121,11 +121,12 @@ def speak(text: str, extra_stop: threading.Event = None) -> None:
             _stop_event.clear()
             break
         if extra_stop is not None and extra_stop.is_set():
-            log.info("[TTS] Interrupted by extra_stop event.")
+            log.info("[TTS] Interrupted by voice session signal.")
             try:
                 engine.stop()
             except Exception:
                 pass
             break
 
-    t.join(timeout=1.0)     # wait for thread to finish (brief)
+    t.join(timeout=1.0)
+    log.debug("[TTS] Done.")

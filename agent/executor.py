@@ -59,8 +59,10 @@ def execute_steps(intent, cfg: dict) -> str:
 
     results = []
     for i, step in enumerate(steps, 1):
-        log.info(f"[STEPS] Step {i}/{len(steps)}")
+        log.info(f"[STEPS] Step {i}/{len(steps)}: action={step.get('action')!r} input={str(step.get('input',''))[:40]!r}")
         result = execute(step, cfg)
+        preview = result[:60] + ('...' if len(str(result)) > 60 else '')
+        log.info(f"[RESULT] Step {i}: {preview!r}")
         results.append(result)
 
     # Single step → plain result. Multi-step → numbered list.
@@ -84,7 +86,7 @@ def execute(intent: dict, cfg: dict) -> str:
     action = (intent.get("action") or "none").strip()
     value  = str(intent.get("input")  or "").strip()
 
-    log.info(f"[CMD] action={action!r}  input={value!r}")
+    log.info(f"[ACTION] {action} -> {value[:50]!r}")
 
     # ── none: LLM did not understand the command ──────────────────────────────
     if action == "none":
